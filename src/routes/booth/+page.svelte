@@ -76,7 +76,7 @@
     }
     // Navigate to the actual camera/booth screen
     console.log("Launching booth for event:", selectedEvent);
-    // goto(`/booth/camera/${selectedEvent.id}`);
+    goto(`/booth/camera/${selectedEvent.id}`);
   }
 
   function handleNewEvent() {
