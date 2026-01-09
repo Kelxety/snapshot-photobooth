@@ -19,6 +19,9 @@ export interface Event {
   location?: string;
   description?: string;
   max_photos?: number;
+  paper_size?: string;
+  template_image?: string;
+  photo_boxes?: string;
   created_at?: string;
 }
 
@@ -50,7 +53,7 @@ export async function createEvent(
 ): Promise<number> {
   const database = await initDatabase();
   const result = await database.execute(
-    'INSERT INTO events (name, date, time, location, description, max_photos) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO events (name, date, time, location, description, max_photos, paper_size, template_image, photo_boxes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [
       event.name,
       event.date,
@@ -58,6 +61,9 @@ export async function createEvent(
       event.location || null,
       event.description || null,
       event.max_photos || 50,
+      event.paper_size || '4R',
+      event.template_image || null,
+      event.photo_boxes || null,
     ]
   );
   return result.lastInsertId ?? 0;
