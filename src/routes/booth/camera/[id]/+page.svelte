@@ -32,6 +32,7 @@
   let showDeviceSelector = $state(false);
   let cameraLoading = $state(true);
   let cameraError = $state<string | null>(null);
+  let selectedFilter = $state<string>('none');
   
   // DSLR support
   let useDSLR = $state(false);
@@ -39,6 +40,17 @@
   let dslrCameras = $state<DSLRCamera[]>([]);
   let selectedDSLRIndex = $state(0);
   let showCameraTypeSelector = $state(false);
+
+  const filters = [
+    { name: 'None', value: 'none', filter: '' },
+    { name: 'Vintage', value: 'vintage', filter: 'sepia(50%) contrast(120%) brightness(90%)' },
+    { name: 'Black & White', value: 'bw', filter: 'grayscale(100%)' },
+    { name: 'Cool', value: 'cool', filter: 'brightness(110%) contrast(110%) hue-rotate(180deg)' },
+    { name: 'Warm', value: 'warm', filter: 'brightness(110%) saturate(150%) hue-rotate(-15deg)' },
+    { name: 'Dramatic', value: 'dramatic', filter: 'contrast(150%) brightness(90%) saturate(120%)' },
+    { name: 'Fade', value: 'fade', filter: 'brightness(110%) contrast(90%) saturate(80%)' },
+    { name: 'Vivid', value: 'vivid', filter: 'saturate(180%) contrast(110%)' }
+  ];
 
   onMount(async () => {
     try {
@@ -280,6 +292,7 @@
   function retake() {
     capturedImage = null;
     countdown = 0;
+    selectedFilter = 'none'; // Reset filter
     // Restart camera if in webcam mode
     if (!useDSLR) {
       initCamera();
@@ -461,7 +474,31 @@
   {:else}
     <!-- Preview Screen -->
     <div class="preview-container">
-      <img src={capturedImage} alt="Captured" class="preview-image" />
+      <img 
+        src={capturedImage} 
+        alt="Captured" 
+        class="preview-image" 
+        style="filter: {filters.find(f => f.value === selectedFilter)?.filter || ''}"
+      />
+
+      <!-- Filter Selector -->
+      <div class="filter-selector">
+        <h3>✨ Filters</h3>
+        <div class="filter-options">
+          {#each filters as filter}
+            <button
+              class="filter-option"
+              class:active={selectedFilter === filter.value}
+              onclick={() => selectedFilter = filter.value}
+            >
+              <div class="filter-preview" style="filter: {filter.filter}">
+                <img src={capturedImage} alt={filter.name} />
+              </div>
+              <span class="filter-name">{filter.name}</span>
+            </button>
+          {/each}
+        </div>
+      </div>
 
       <div class="preview-controls">
         <button class="retake-btn" onclick={retake}>
@@ -754,14 +791,96 @@
   justify-content: center;
   background: #000;
   position: relative;
+  padding: 40px 20px;
 }
 
 .preview-image {
   max-width: 90%;
-  max-height: 70vh;
+  max-height: 50vh;
   object-fit: contain;
   border-radius: 12px;
   box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
+  transition: filter 0.3s ease;
+}
+
+.filter-selector {
+  margin-top: 30px;
+  width: 100%;
+  max-width: 800px;
+}
+
+.filter-selector h3 {
+  color: white;
+  font-size: 20px;
+  margin-bottom: 15px;
+  text-align: center;
+}
+
+.filter-options {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 10px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+.filter-options::-webkit-scrollbar {
+  height: 6px;
+}
+
+.filter-options::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.filter-options::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+.filter-option {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid transparent;
+  border-radius: 12px;
+  padding: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-option:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+}
+
+.filter-option.active {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.filter-preview {
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+
+.filter-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.filter-name {
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
 }
 
 .preview-controls {
