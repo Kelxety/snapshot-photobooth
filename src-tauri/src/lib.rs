@@ -70,6 +70,24 @@ pub fn run() {
                 );
             ",
             kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "add_paper_size_and_template",
+            sql: "ALTER TABLE events ADD COLUMN paper_size TEXT DEFAULT '4R'",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "add_template_image",
+            sql: "ALTER TABLE events ADD COLUMN template_image TEXT",
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "add_photo_boxes",
+            sql: "ALTER TABLE events ADD COLUMN photo_boxes TEXT",
+            kind: MigrationKind::Up,
         }
     ];
 

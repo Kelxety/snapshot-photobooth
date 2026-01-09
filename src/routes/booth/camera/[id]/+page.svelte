@@ -34,6 +34,30 @@
   let cameraError = $state<string | null>(null);
   let selectedFilter = $state<string>('none');
   
+  // Multi-photo session - uses custom template
+  let sessionPhotos = $state<string[]>([]);
+  let currentPhotoIndex = $state(0);
+  const MAX_PHOTOS = 10;
+  let finalComposite = $state<string | null>(null);
+  
+  // Photo boxes from template
+  interface PhotoBox {
+    id: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    color: string;
+    number: number;
+  }
+  
+  let photoBoxes = $state<PhotoBox[]>([]);
+  
+  // Get required photos count from photo boxes
+  let requiredPhotos = $derived(() => {
+    return photoBoxes.length || 1;
+  });
+  
   // DSLR support
   let useDSLR = $state(false);
   let dslrSupported = $state(false);
@@ -52,6 +76,14 @@
     { name: 'Vivid', value: 'vivid', filter: 'saturate(180%) contrast(110%)' }
   ];
 
+  const layouts = [
+    { name: '1 Photo', value: 'layout-1', boxes: 1, description: 'Single large photo' },
+    { name: '2 Photos', value: 'layout-2', boxes: 2, description: 'Two photos side by side' },
+    { name: '3 Photos', value: 'layout-3', boxes: 3, description: 'Three photos in a row' },
+    { name: '4 Photos', value: 'layout-4', boxes: 4, description: 'Four photos in a grid' },
+    { name: '5 Photos', value: 'layout-5', boxes: 5, description: 'Five photos collage' }
+  ];
+
   onMount(async () => {
     try {
       if (!eventId) {
@@ -59,6 +91,17 @@
       }
       const eventData = await getEvent(parseInt(eventId));
       event = eventData;
+      
+      // Parse photo boxes from event
+      if (event?.photo_boxes) {
+        try {
+          photoBoxes = JSON.parse(event.photo_boxes);
+          console.log('Loaded photo boxes:', photoBoxes);
+        } catch (e) {
+          console.error('Failed to parse photo boxes:', e);
+          photoBoxes = [];
+        }
+      }
       
       // Check if DSLR support is available
       await checkDSLRSupport();
@@ -266,7 +309,11 @@
     canvasElement.height = videoElement.videoHeight;
     context.drawImage(videoElement, 0, 0);
 
-    capturedImage = canvasElement.toDataURL('image/jpeg');
+    const photoData = canvasElement.toDataURL('image/jpeg');
+    sessionPhotos.push(photoData);
+    sessionPhotos = sessionPhotos; // Trigger reactivity
+    
+    capturedImage = photoData;
     isCapturing = false;
   }
 
@@ -277,7 +324,11 @@
       });
       
       if (result.success && result.image_data) {
-        capturedImage = result.image_data;
+        const photoData = result.image_data;
+        sessionPhotos.push(photoData);
+        sessionPhotos = sessionPhotos; // Trigger reactivity
+        
+        capturedImage = photoData;
       } else {
         alert(result.error || 'Failed to capture image from DSLR');
       }
@@ -292,11 +343,158 @@
   function retake() {
     capturedImage = null;
     countdown = 0;
-    selectedFilter = 'none'; // Reset filter
-    // Restart camera if in webcam mode
-    if (!useDSLR) {
-      initCamera();
+    selectedFilter = 'none';
+    // Continue session - don't restart camera
+  }
+  
+  function takeAnother() {
+    if (sessionPhotos.length >= MAX_PHOTOS) {
+      alert(`Maximum ${MAX_PHOTOS} photos reached!`);
+      return;
     }
+    retake();
+  }
+  
+  function endSession() {
+    if (sessionPhotos.length === 0) {
+      alert('Please take at least one photo!');
+      return;
+    }
+    const required = requiredPhotos();
+    if (sessionPhotos.length < required) {
+      alert(`Please take at least ${required} photo(s) for the selected layout!`);
+      return;
+    }
+    // Generate composite immediately with event's layout
+    generateComposite();
+  }
+  
+  function generateComposite() {
+    if (!canvasElement) {
+      console.error('Canvas element not found');
+      alert('Error: Canvas not ready');
+      return;
+    }
+    
+    if (!event?.template_image) {
+      alert('No template image found for this event');
+      return;
+    }
+    
+    if (photoBoxes.length === 0) {
+      alert('No photo boxes defined in template');
+      return;
+    }
+    
+    console.log('Generating composite with template');
+    console.log('Session photos:', sessionPhotos.length);
+    console.log('Photo boxes:', photoBoxes.length);
+    
+    const ctx = canvasElement.getContext('2d');
+    if (!ctx) {
+      console.error('Canvas context not available');
+      alert('Error: Cannot create canvas context');
+      return;
+    }
+    
+    // Set canvas size based on paper size
+    const paperSizes: Record<string, { width: number; height: number }> = {
+      '4R': { width: 1200, height: 1800 },
+      '5R': { width: 1500, height: 2100 }
+    };
+    
+    const size = paperSizes[event.paper_size || '4R'];
+    canvasElement.width = size.width;
+    canvasElement.height = size.height;
+    
+    // White background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size.width, size.height);
+    
+    const loadImage = (src: string): Promise<HTMLImageElement> => {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = src;
+      });
+    };
+    
+    // Load all captured photos
+    Promise.all(sessionPhotos.map(loadImage))
+      .then(photoImages => {
+        console.log('All photos loaded, placing into boxes...');
+        
+        // Sort boxes by number to ensure correct placement
+        const sortedBoxes = [...photoBoxes].sort((a, b) => a.number - b.number);
+        
+        // Scale factor from 1000px base to actual canvas size
+        const scaleX = size.width / 1000;
+        const scaleY = size.height / 1000;
+        
+        // Draw each photo into its box
+        sortedBoxes.forEach((box, index) => {
+          if (index >= photoImages.length) return;
+          
+          const photoImg = photoImages[index];
+          
+          // Scale box coordinates
+          const boxX = box.x * scaleX;
+          const boxY = box.y * scaleY;
+          const boxW = box.width * scaleX;
+          const boxH = box.height * scaleY;
+          
+          // Calculate scale to fit photo in box (cover mode)
+          const scaleToFit = Math.max(boxW / photoImg.width, boxH / photoImg.height);
+          const scaledW = photoImg.width * scaleToFit;
+          const scaledH = photoImg.height * scaleToFit;
+          
+          // Center the photo in the box
+          const offsetX = (boxW - scaledW) / 2;
+          const offsetY = (boxH - scaledH) / 2;
+          
+          // Clip to box bounds and draw
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(boxX, boxY, boxW, boxH);
+          ctx.clip();
+          ctx.drawImage(photoImg, boxX + offsetX, boxY + offsetY, scaledW, scaledH);
+          ctx.restore();
+        });
+        
+        // Load and overlay template image on top
+        if (!event?.template_image) {
+          throw new Error('Template image not found');
+        }
+        return loadImage(event.template_image);
+      })
+      .then(templateImg => {
+        console.log('Template image loaded, overlaying...');
+        
+        // Draw template on top (PNG with transparency)
+        ctx.drawImage(templateImg, 0, 0, size.width, size.height);
+        
+        if (!canvasElement) {
+          console.error('Canvas element lost after drawing');
+          return;
+        }
+        
+        console.log('Converting canvas to data URL...');
+        finalComposite = canvasElement.toDataURL('image/jpeg', 0.95);
+        console.log('Composite generated successfully!');
+      })
+      .catch(error => {
+        console.error('Error generating composite:', error);
+        alert('Error creating layout: ' + error.message);
+      });
+  }
+  
+  function resetSession() {
+    sessionPhotos = [];
+    capturedImage = null;
+    finalComposite = null;
+    selectedFilter = 'none';
+    initCamera();
   }
 
   function handleSaveAndShare() {
@@ -375,6 +573,12 @@
         <div class="event-badge">
           <span class="icon">🎉</span>
           {event?.name || 'Event'}
+        </div>
+        
+        <!-- Session Progress -->
+        <div class="session-progress">
+          <span class="photo-count">{sessionPhotos.length}/{requiredPhotos()} photos</span>
+          <span class="layout-info">{event?.paper_size || '4R'} Template</span>
         </div>
       </div>
 
@@ -480,6 +684,21 @@
         class="preview-image" 
         style="filter: {filters.find(f => f.value === selectedFilter)?.filter || ''}"
       />
+      
+      <!-- Session Photos Gallery -->
+      {#if sessionPhotos.length > 0}
+        <div class="session-gallery">
+          <h3>📸 Session Photos ({sessionPhotos.length}/{requiredPhotos()})</h3>
+          <div class="gallery-grid">
+            {#each sessionPhotos as photo, index}
+              <div class="gallery-item" class:current={index === sessionPhotos.length - 1}>
+                <img src={photo} alt="Photo {index + 1}" />
+                <span class="photo-number">{index + 1}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
       <!-- Filter Selector -->
       <div class="filter-selector">
@@ -501,12 +720,15 @@
       </div>
 
       <div class="preview-controls">
-        <button class="retake-btn" onclick={retake}>
-          🔄 Retake
-        </button>
-        <button class="save-btn" onclick={handleSaveAndShare}>
-          ✓ Save & Share
-        </button>
+        {#if sessionPhotos.length < requiredPhotos()}
+          <button class="take-another-btn" onclick={takeAnother}>
+            📷 Take Another ({sessionPhotos.length}/{requiredPhotos()})
+          </button>
+        {:else}
+          <button class="end-session-btn" onclick={endSession}>
+            ✓ Generate Photo Layout
+          </button>
+        {/if}
       </div>
 
       <button class="back-btn-preview" onclick={handleBack}>
@@ -514,6 +736,35 @@
       </button>
     </div>
   {/if}
+  
+  <!-- Final Composite View -->
+  {#if finalComposite}
+    <div class="final-composite-view">
+      <div class="composite-container">
+        <h2>🎉 Your Photo Layout</h2>
+        <img src={finalComposite} alt="Final Layout" class="composite-image" />
+        
+        <div class="composite-actions">
+          <button class="print-btn" onclick={() => window.print()}>
+            🖨️ Print
+          </button>
+          <button class="save-btn" onclick={handleSaveAndShare}>
+            💾 Save & Share
+          </button>
+          <button class="new-session-btn" onclick={resetSession}>
+            🔄 New Session
+          </button>
+        </div>
+        
+        <button class="back-btn-composite" onclick={handleBack}>
+          ← Back to Booth
+        </button>
+      </div>
+    </div>
+  {/if}
+  
+  <!-- Hidden canvas for image processing - always available -->
+  <canvas bind:this={canvasElement} class="hidden-canvas"></canvas>
 </div>
 
 <style>
@@ -639,6 +890,9 @@
   position: absolute;
   top: 20px;
   left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .event-badge {
@@ -652,6 +906,25 @@
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.session-progress {
+  background: rgba(59, 130, 246, 0.9);
+  backdrop-filter: blur(10px);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.layout-info {
+  font-size: 12px;
+  opacity: 0.9;
 }
 
 .top-right-controls {
@@ -792,11 +1065,103 @@
   background: #000;
   position: relative;
   padding: 40px 20px;
+  overflow-y: auto;
+}
+
+.photo-with-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 90%;
+  margin: 0 auto;
+}
+
+.photo-with-frame img {
+  display: block;
+  max-width: 100%;
+  max-height: 40vh;
+  object-fit: contain;
+  transition: filter 0.3s ease;
+}
+
+/* Frame Styles */
+.photo-with-frame[data-frame="none"] img {
+  border-radius: 12px;
+  box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
+}
+
+.photo-with-frame[data-frame="classic"] img {
+  border: 20px solid white;
+  box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+}
+
+.photo-with-frame[data-frame="polaroid"] img {
+  border: 30px solid white;
+  border-bottom: 80px solid white;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.photo-with-frame[data-frame="gold"] img {
+  border: 25px solid #d4af37;
+  padding: 10px;
+  background: white;
+  box-shadow: 
+    0 0 0 3px #8b7220,
+    0 0 40px rgba(212, 175, 55, 0.5);
+}
+
+.photo-with-frame[data-frame="rounded"] img {
+  border: 15px solid white;
+  border-radius: 30px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+
+.photo-with-frame[data-frame="neon"] img {
+  border: 5px solid #00ffff;
+  padding: 20px;
+  background: #000;
+  box-shadow: 
+    0 0 30px #00ffff,
+    0 0 60px #00ffff;
+}
+
+.photo-with-frame[data-frame="film"] {
+  background: #1a1a1a;
+  padding: 40px;
+  position: relative;
+}
+
+.photo-with-frame[data-frame="film"]::before,
+.photo-with-frame[data-frame="film"]::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 15px;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 10px,
+    white 10px,
+    white 15px
+  );
+}
+
+.photo-with-frame[data-frame="film"]::before {
+  top: 10px;
+}
+
+.photo-with-frame[data-frame="film"]::after {
+  bottom: 10px;
+}
+
+.photo-with-frame[data-frame="film"] img {
+  border: 15px solid transparent;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
 }
 
 .preview-image {
   max-width: 90%;
-  max-height: 50vh;
+  max-height: 40vh;
   object-fit: contain;
   border-radius: 12px;
   box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
@@ -877,6 +1242,152 @@
 }
 
 .filter-name {
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+}
+
+/* Frame Selector - similar to filter selector */
+.frame-selector {
+  margin-top: 30px;
+  width: 100%;
+  max-width: 800px;
+}
+
+.frame-selector h3 {
+  color: white;
+  font-size: 20px;
+  margin-bottom: 15px;
+  text-align: center;
+}
+
+.frame-options {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 10px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+.frame-options::-webkit-scrollbar {
+  height: 6px;
+}
+
+.frame-options::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.frame-options::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+.frame-option {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid transparent;
+  border-radius: 12px;
+  padding: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.frame-option:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+}
+
+.frame-option.active {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.2);
+}
+
+.frame-preview {
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  overflow: visible;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1a1a1a;
+}
+
+.frame-preview img {
+  max-width: 60px;
+  max-height: 60px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+/* Frame preview styles */
+.frame-preview[data-frame="classic"] img {
+  border: 3px solid white;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+.frame-preview[data-frame="polaroid"] img {
+  border: 5px solid white;
+  border-bottom: 12px solid white;
+}
+
+.frame-preview[data-frame="gold"] img {
+  border: 4px solid #d4af37;
+  padding: 2px;
+  background: white;
+  box-shadow: 0 0 0 1px #8b7220;
+}
+
+.frame-preview[data-frame="rounded"] img {
+  border: 3px solid white;
+  border-radius: 8px;
+}
+
+.frame-preview[data-frame="neon"] img {
+  border: 2px solid #00ffff;
+  padding: 3px;
+  background: #000;
+  box-shadow: 0 0 10px #00ffff;
+}
+
+.frame-preview[data-frame="film"] {
+  background: #333;
+  padding: 8px;
+  position: relative;
+}
+
+.frame-preview[data-frame="film"]::before,
+.frame-preview[data-frame="film"]::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  height: 3px;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 3px,
+    white 3px,
+    white 5px
+  );
+}
+
+.frame-preview[data-frame="film"]::before {
+  top: 2px;
+}
+
+.frame-preview[data-frame="film"]::after {
+  bottom: 2px;
+}
+
+.frame-name {
   color: white;
   font-size: 12px;
   font-weight: 500;
@@ -1047,6 +1558,389 @@
 
 .close-btn:hover {
   background: rgba(255, 255, 255, 0.2);
+}
+
+/* Session Gallery */
+.session-gallery {
+  margin-top: 30px;
+  width: 100%;
+  max-width: 800px;
+}
+
+.session-gallery h3 {
+  color: white;
+  font-size: 18px;
+  margin-bottom: 15px;
+  text-align: center;
+}
+
+.gallery-grid {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 10px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+.gallery-grid::-webkit-scrollbar {
+  height: 6px;
+}
+
+.gallery-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.gallery-grid::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+.gallery-item {
+  position: relative;
+  flex-shrink: 0;
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  transition: all 0.2s;
+}
+
+.gallery-item:hover {
+  transform: scale(1.05);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.gallery-item.current {
+  border-color: #3b82f6;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+}
+
+.gallery-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-number {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+/* New Action Buttons */
+.take-another-btn,
+.end-session-btn {
+  padding: 16px 32px;
+  font-size: 18px;
+  font-weight: 600;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.take-another-btn {
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  color: white;
+}
+
+.take-another-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translateY(-2px);
+}
+
+.end-session-btn {
+  background: #10b981;
+  color: white;
+}
+
+.end-session-btn:hover {
+  background: #059669;
+  transform: translateY(-2px);
+}
+
+/* Layout Selection Modal */
+.layout-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal-content-large {
+  background: #1a1a1a;
+  border-radius: 20px;
+  padding: 40px;
+  max-width: 900px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-content-large h2 {
+  color: white;
+  font-size: 32px;
+  margin-bottom: 10px;
+  text-align: center;
+}
+
+.modal-subtitle {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 16px;
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.layout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.layout-option {
+  background: rgba(255, 255, 255, 0.05);
+  border: 3px solid transparent;
+  border-radius: 16px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.layout-option:hover:not(.disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-4px);
+}
+
+.layout-option.active {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.layout-option.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.layout-preview {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 20px;
+  aspect-ratio: 3/4;
+  display: grid;
+  gap: 8px;
+}
+
+.layout-preview[data-layout="layout-1"] {
+  grid-template-columns: 1fr;
+}
+
+.layout-preview[data-layout="layout-2"] {
+  grid-template-columns: 1fr 1fr;
+}
+
+.layout-preview[data-layout="layout-3"] {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.layout-preview[data-layout="layout-4"] {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.layout-preview[data-layout="layout-5"] {
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.layout-preview[data-layout="layout-5"] .layout-box:nth-child(1),
+.layout-preview[data-layout="layout-5"] .layout-box:nth-child(2) {
+  grid-column: span 2;
+}
+
+.layout-preview[data-layout="layout-5"] .layout-box:nth-child(1) {
+  grid-column: 1 / 2;
+}
+
+.layout-preview[data-layout="layout-5"] .layout-box:nth-child(2) {
+  grid-column: 2 / 4;
+}
+
+.layout-box {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  border: 2px dashed rgba(255, 255, 255, 0.3);
+}
+
+.layout-info {
+  text-align: center;
+}
+
+.layout-info h4 {
+  color: white;
+  font-size: 18px;
+  margin: 0 0 8px 0;
+}
+
+.layout-info p {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  margin: 0;
+}
+
+.layout-info .warning {
+  display: block;
+  color: #fbbf24;
+  font-size: 12px;
+  margin-top: 8px;
+  font-weight: 600;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 15px;
+  justify-content: center;
+}
+
+.cancel-btn,
+.generate-btn {
+  padding: 16px 40px;
+  font-size: 18px;
+  font-weight: 600;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cancel-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.cancel-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.generate-btn {
+  background: #3b82f6;
+  color: white;
+}
+
+.generate-btn:hover {
+  background: #2563eb;
+  transform: translateY(-2px);
+}
+
+/* Final Composite View */
+.final-composite-view {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 40px;
+}
+
+.composite-container {
+  text-align: center;
+  max-width: 90%;
+}
+
+.composite-container h2 {
+  color: white;
+  font-size: 36px;
+  margin-bottom: 30px;
+}
+
+.composite-image {
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+}
+
+.composite-actions {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  margin-top: 30px;
+}
+
+.print-btn,
+.new-session-btn {
+  padding: 16px 32px;
+  font-size: 18px;
+  font-weight: 600;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.print-btn {
+  background: #8b5cf6;
+  color: white;
+}
+
+.print-btn:hover {
+  background: #7c3aed;
+  transform: translateY(-2px);
+}
+
+.new-session-btn {
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  color: white;
+}
+
+.new-session-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translateY(-2px);
+}
+
+.back-btn-composite {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.back-btn-composite:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 @media (max-width: 768px) {
