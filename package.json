@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "setup": "node src-tauri/bundle-gphoto2.js",
+    "tauri:build": "pnpm run setup && tauri build"
   },
   "license": "MIT",
   "dependencies": {
