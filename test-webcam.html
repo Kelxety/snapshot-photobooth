@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Webcam Devices</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        video { border: 2px solid #333; margin: 10px 0; }
+        .device { padding: 10px; margin: 5px 0; background: #f0f0f0; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Available Webcam Devices</h1>
+    <div id="devices"></div>
+    <h2>Camera Preview</h2>
+    <video id="video" width="640" height="480" autoplay></video>
+    <br>
+    <button onclick="startCamera()">Start Camera</button>
+
+    <script>
+        async function listDevices() {
+            try {
+                await navigator.mediaDevices.getUserMedia({ video: true });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(d => d.kind === 'videoinput');
+                
+                const devicesDiv = document.getElementById('devices');
+                devicesDiv.innerHTML = '<h3>Found ' + videoDevices.length + ' camera(s):</h3>';
+                
+                videoDevices.forEach((device, index) => {
+                    const div = document.createElement('div');
+                    div.className = 'device';
+                    div.innerHTML = `<strong>${index + 1}. ${device.label}</strong><br>ID: ${device.deviceId}`;
+                    devicesDiv.appendChild(div);
+                });
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error accessing cameras: ' + error.message);
+            }
+        }
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 1280, height: 720 } 
+                });
+                document.getElementById('video').srcObject = stream;
+            } catch (error) {
+                alert('Error starting camera: ' + error.message);
+            }
+        }
+
+        listDevices();
+    </script>
+</body>
+</html>
