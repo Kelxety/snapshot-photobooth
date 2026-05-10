@@ -1,0 +1,1 @@
+﻿const fs=require('fs');fs.writeFileSync('pl-new.txt','OK','utf8');console.log('done');
